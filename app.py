@@ -7,54 +7,100 @@ from faster_whisper import WhisperModel
 import sounddevice as sd
 import argparse
 import os
+import soundfile as sf
 from rich.console import Console
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_openai import ChatOpenAI
-from tts import TextToSpeechService
+from supertonic import TTS
 
 console = Console()
 
 # Parse command line arguments
+
+#parser.add_argument("--voice-style", type=str, default="assets/voice_styles/M3.json", 
+#                    help="Path to voice style JSON file (F1, F2, M1, M2)")
+#parser.add_argument("--speed", type=float, default=1.0, 
+#                    help="Speech speed (1.0 = normal, higher = faster)")
+#parser.add_argument("--steps", type=int, default=20, 
+#                    help="Denoising steps (higher = better quality, slower)")
+#parser.add_argument("--model", type=str, default="qwen/qwen3-8b", 
+#                    help="LLM model to use")
+#parser.add_argument("--save-voice", action="store_true", 
+#                    help="Save generated voice samples")
+#parser.add_argument("--use-gpu", action="store_true", 
+#                    help="Use GPU for TTS inference (if available)")
+#parser.add_argument("--vad-threshold", type=float, default=0.5,
+#                    help="Silero VAD threshold (0.0-1.0, higher = more strict speech detection)")
+#parser.add_argument("--silence-duration", type=float, default=0.8,
+#                    help="Seconds of silence before stopping recording")
+#parser.add_argument("--min-speech-duration", type=float, default=0.5,
+#                    help="Minimum seconds of speech to process")
+
 parser = argparse.ArgumentParser(description="Local Voice Assistant with Supertonic TTS")
-parser.add_argument("--voice-style", type=str, default="assets/voice_styles/F1.json", 
-                    help="Path to voice style JSON file (F1, F2, M1, M2)")
-parser.add_argument("--speed", type=float, default=1.05, 
-                    help="Speech speed (1.0 = normal, higher = faster)")
-parser.add_argument("--steps", type=int, default=5, 
-                    help="Denoising steps (higher = better quality, slower)")
-parser.add_argument("--model", type=str, default="qwen/qwen3-8b", 
-                    help="LLM model to use")
-parser.add_argument("--save-voice", action="store_true", 
-                    help="Save generated voice samples")
-parser.add_argument("--use-gpu", action="store_true", 
-                    help="Use GPU for TTS inference (if available)")
-parser.add_argument("--vad-threshold", type=float, default=0.5,
-                    help="Silero VAD threshold (0.0-1.0, higher = more strict speech detection)")
-parser.add_argument("--silence-duration", type=float, default=0.8,
-                    help="Seconds of silence before stopping recording")
-parser.add_argument("--min-speech-duration", type=float, default=0.5,
-                    help="Minimum seconds of speech to process")
+
+parser.add_argument(
+    "--voice",
+    type=str,
+    default="M3",
+    help="Voice: F1, F2, M1, M2, M3"
+)
+
+parser.add_argument(
+    "--model",
+    type=str,
+    default="qwen/qwen3-8b",
+    help="LLM model to use"
+)
+
+parser.add_argument(
+    "--save-voice",
+    action="store_true",
+    help="Save generated voice samples"
+)
+
+parser.add_argument(
+    "--vad-threshold",
+    type=float,
+    default=0.5,
+    help="Silero VAD threshold"
+)
+
+parser.add_argument(
+    "--silence-duration",
+    type=float,
+    default=0.8,
+    help="Seconds of silence before stopping recording"
+)
+
+parser.add_argument(
+    "--min-speech-duration",
+    type=float,
+    default=0.5,
+    help="Minimum seconds of speech to process"
+)
+
 args = parser.parse_args()
 
 console.print("[cyan]Loading models...")
 
 # Load Whisper STT using faster-whisper (4x faster than openai-whisper)
 # compute_type="int8" for CPU, use "float16" if you have GPU
-stt = WhisperModel("small.en", device="cpu", compute_type="int8")
+stt = WhisperModel("small", device="cpu", compute_type="int8")
 
 # Initialize TTS with Supertonic
-tts = TextToSpeechService(
-    onnx_dir="assets/onnx",
-    voice_style_path=args.voice_style,
-    use_gpu=args.use_gpu,
-    total_steps=args.steps,
-    speed=args.speed,
+tts = TTS(auto_download=True)
+voice_style = tts.get_voice_style(
+    voice_name=args.voice
 )
 
 # Prompt template - NO system message here, it comes from LM Studio's preset
 prompt_template = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "Responda sempre em português do Brasil correto, com acentuação completa, ortografia natural e sem emojis."
+    ),
     MessagesPlaceholder(variable_name="history"),
     ("human", "{input} /no_think")
 ])
@@ -246,7 +292,7 @@ def transcribe(audio_np: np.ndarray) -> str | None:
     Returns None if the transcription looks like a hallucination.
     """
     # faster-whisper returns (segments_generator, info)
-    segments, info = stt.transcribe(audio_np, language="en", vad_filter=True)
+    segments, info = stt.transcribe(audio_np, language="pt", vad_filter=True)
     
     # Collect segments and check no_speech probability
     segments_list = list(segments)
@@ -294,14 +340,32 @@ def play_audio(sample_rate, audio_array):
     sd.play(audio_array, sample_rate)
     sd.wait()
 
+def clean_tts_text(text: str) -> str:
+    """
+    Remove caracteres Unicode problemáticos para o Supertonic TTS
+    """
+    import re
+
+    # remove emojis e símbolos invisíveis
+    text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
+
+    # remove zero-width chars
+    text = text.replace('\u200d', '')
+    text = text.replace('\ufe0f', '')
+    text = text.replace('\u200b', '')
+
+    # remove espaços duplicados
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    return text
+
 
 if __name__ == "__main__":
     console.print("[cyan]🤖 Local Voice Assistant with Supertonic TTS")
     console.print("[cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     
-    voice_name = os.path.basename(args.voice_style).replace('.json', '')
+    voice_name = args.voice
     console.print(f"[green]Voice style: {voice_name}")
-    console.print(f"[blue]Speech speed: {args.speed}x")
     console.print(f"[blue]LLM model: {args.model}")
     console.print(f"[blue]VAD threshold: {args.vad_threshold}")
     console.print("[cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -319,15 +383,23 @@ if __name__ == "__main__":
     )
 
     # Create voices directory if saving voices
+
+    response_count = 0
+
     if args.save_voice:
-        os.makedirs("voices", exist_ok=True)
+        response_count += 1
+        filename = f"voices/response_{response_count:03d}.wav"
+
+        sf.write(filename, audio_array, sample_rate)
+
+        console.print(f"[dim]Voice saved to: {filename}[/dim]")
 
     response_count = 0
 
     try:
         while True:
             console.print("[dim]🎤 Listening... (speak when ready)[/dim]")
-            
+
             # Record with VAD
             audio_np = recorder.record_until_silence()
             
@@ -351,7 +423,17 @@ if __name__ == "__main__":
 
             with console.status("Generating response...", spinner="dots"):
                 response = get_llm_response(text)
-                sample_rate, audio_array = tts.long_form_synthesize(response)
+                response = get_llm_response(text)
+                response = clean_tts_text(response)
+
+                wav, duration = tts.synthesize(
+                    response,
+                    voice_style=voice_style,
+                    lang="pt",
+                )
+                                
+            audio_array = wav.squeeze()
+            sample_rate = 44100
 
             console.print(f"[cyan]Assistant: {response}")
 
@@ -359,7 +441,7 @@ if __name__ == "__main__":
             if args.save_voice:
                 response_count += 1
                 filename = f"voices/response_{response_count:03d}.wav"
-                tts.save_voice_sample(response, filename)
+                sf.write(filename, audio_array, sample_rate)
                 console.print(f"[dim]Voice saved to: {filename}[/dim]")
 
             play_audio(sample_rate, audio_array)
