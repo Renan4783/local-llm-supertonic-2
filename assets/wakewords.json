@@ -1,0 +1,13 @@
+{
+  "wake_words": [
+    "assistente",
+    "ei assistente",
+    "oi assistente",
+    "olá assistente",
+    "e aí assistente",
+    "fala assistente",
+    "alô assistente",
+    "escuta assistente",
+    "acorda assistente"
+  ]
+}

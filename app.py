@@ -3,10 +3,10 @@ import collections
 import re
 import numpy as np
 import torch
+import json
 from faster_whisper import WhisperModel
 import sounddevice as sd
 import argparse
-import os
 import soundfile as sf
 from rich.console import Console
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -15,29 +15,17 @@ from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_openai import ChatOpenAI
 from supertonic import TTS
 
+# Wake words list (in Portuguese) - loaded from JSON for easy customization
+# Assistente, Olá Assistente, Ei Assistente, Oi Assistente, E aí Assistente, Fala Assistente, Alô Assistente, Escuta Assistente, Acorda Assistente
+with open("assets/wakewords.json", "r", encoding="utf-8") as f:
+    WAKE_WORDS = json.load(f)["wake_words"]
+
+with open("assets/stt.json", "r", encoding="utf-8") as f:
+    STT_CONFIG = json.load(f)["language"]
+
 console = Console()
 
 # Parse command line arguments
-
-#parser.add_argument("--voice-style", type=str, default="assets/voice_styles/M3.json", 
-#                    help="Path to voice style JSON file (F1, F2, M1, M2)")
-#parser.add_argument("--speed", type=float, default=1.0, 
-#                    help="Speech speed (1.0 = normal, higher = faster)")
-#parser.add_argument("--steps", type=int, default=20, 
-#                    help="Denoising steps (higher = better quality, slower)")
-#parser.add_argument("--model", type=str, default="qwen/qwen3-8b", 
-#                    help="LLM model to use")
-#parser.add_argument("--save-voice", action="store_true", 
-#                    help="Save generated voice samples")
-#parser.add_argument("--use-gpu", action="store_true", 
-#                    help="Use GPU for TTS inference (if available)")
-#parser.add_argument("--vad-threshold", type=float, default=0.5,
-#                    help="Silero VAD threshold (0.0-1.0, higher = more strict speech detection)")
-#parser.add_argument("--silence-duration", type=float, default=0.8,
-#                    help="Seconds of silence before stopping recording")
-#parser.add_argument("--min-speech-duration", type=float, default=0.5,
-#                    help="Minimum seconds of speech to process")
-
 parser = argparse.ArgumentParser(description="Local Voice Assistant with Supertonic TTS")
 
 parser.add_argument(
@@ -127,7 +115,6 @@ chain_with_history = RunnableWithMessageHistory(
     input_messages_key="input",
     history_messages_key="history",
 )
-
 
 class SileroVADRecorder:
     """Voice Activity Detection using Silero VAD (more accurate than webrtcvad)."""
@@ -285,14 +272,14 @@ def is_hallucination(text: str) -> bool:
     
     return False
 
-
+#Transcription function that uses faster-whisper to transcribe audio and includes a check for hallucinations based on the content and no_speech probability. Returns None if the transcription is likely a hallucination or just noise.
 def transcribe(audio_np: np.ndarray) -> str | None:
     """
     Transcribes audio using faster-whisper.
     Returns None if the transcription looks like a hallucination.
     """
     # faster-whisper returns (segments_generator, info)
-    segments, info = stt.transcribe(audio_np, language="pt", vad_filter=True)
+    segments, info = stt.transcribe(audio_np, language=STT_CONFIG, vad_filter=True)
     
     # Collect segments and check no_speech probability
     segments_list = list(segments)
@@ -302,7 +289,7 @@ def transcribe(audio_np: np.ndarray) -> str | None:
     
     # Check average no_speech probability
     avg_no_speech = sum(seg.no_speech_prob for seg in segments_list) / len(segments_list)
-    if avg_no_speech > 0.6:
+    if avg_no_speech > 0.85:
         return None
     
     # Join all segment texts
@@ -418,11 +405,29 @@ if __name__ == "__main__":
             if not text or len(text.strip()) < 2:
                 console.print("[dim]  (filtered noise/hallucination)[/dim]")
                 continue
+
+            text_lower = text.lower()
+
+            # WAKE WORD FILTER
+            if not any(w in text_lower for w in WAKE_WORDS):
+                console.print(f"[dim]Ignoring: {text}[/dim]")
+                continue
+
+            # remove wake word
+            for w in WAKE_WORDS:
+                text_lower = text_lower.replace(w, "")
+
+            text = text_lower.strip()
+
+            # limpa espaços duplicados
+            text = re.sub(r"\s+", " ", text)
+
+            # remove pontuação solta no início (", você...", ". você...")
+            text = re.sub(r"^[,.;:\-–—]+", "", text)
                 
             console.print(f"[yellow]You: {text}")
 
             with console.status("Generating response...", spinner="dots"):
-                response = get_llm_response(text)
                 response = get_llm_response(text)
                 response = clean_tts_text(response)
 
