@@ -1,9 +1,11 @@
 import time
 import collections
 import re
+from xmlrpc import client
 import numpy as np
 import torch
 import json
+import screenreader
 from faster_whisper import WhisperModel
 import sounddevice as sd
 import argparse
@@ -22,6 +24,9 @@ with open("assets/wakewords.json", "r", encoding="utf-8") as f:
 
 with open("assets/stt.json", "r", encoding="utf-8") as f:
     STT_CONFIG = json.load(f)["language"]
+
+with open("assets/commands.json", "r", encoding="utf-8") as f:
+    COMMANDS = json.load(f)
 
 console = Console()
 
@@ -344,6 +349,12 @@ def clean_tts_text(text: str) -> str:
     # remove espaços duplicados
     text = re.sub(r'\s+', ' ', text).strip()
 
+    # remove caracteres que quebram TTS
+    text = re.sub(r'[<>{}[\]=_*`#~|®©™]', '', text)
+
+    # remove múltiplos espaços
+    text = re.sub(r'\s+', ' ', text)
+
     return text
 
 
@@ -424,11 +435,42 @@ if __name__ == "__main__":
 
             # remove pontuação solta no início (", você...", ". você...")
             text = re.sub(r"^[,.;:\-–—]+", "", text)
-                
+
             console.print(f"[yellow]You: {text}")
 
             with console.status("Generating response...", spinner="dots"):
-                response = get_llm_response(text)
+                last_screen_context = ""
+                # Faz a leitura da tela se o usuário pedir, ou captura foto da webcam
+                if any(cmd in text_lower for cmd in COMMANDS["screenreader"]):
+                    conteudo = screenreader.ler_tela_para_o_gemma()
+                    last_screen_context = conteudo
+                    prompt = f"""
+                    O usuário pediu para analisar a tela atual.
+                    Contexto anterior da tela: {last_screen_context}
+                    Conteúdo detectado pelo OCR: {conteudo}
+                    Não leia apenas os caracteres.
+                    Explique de forma natural e útil o que parece estar acontecendo na tela.
+                    Se houver botões, janelas, programas ou contexto importante, descreva isso.
+                    Responda como um assistente inteligente.
+                    """
+                    response = get_llm_response(prompt)
+
+                elif any(cmd in text_lower for cmd in COMMANDS["webcam"]):
+                    conteudo = screenreader.capturar_foto_webcam()
+                    prompt = f"""
+                    O usuário pediu para analisar a tela atual.
+                    Contexto anterior da tela: {last_screen_context}
+                    Conteúdo detectado pelo OCR: {conteudo}
+                    Não leia apenas os caracteres.
+                    Explique de forma natural e útil o que parece estar acontecendo na tela.
+                    Se houver botões, janelas, programas ou contexto importante, descreva isso.
+                    Responda como um assistente inteligente.
+                    """
+                    response = get_llm_response(prompt)
+
+                else:
+                    response = get_llm_response(text)
+
                 response = clean_tts_text(response)
 
                 wav, duration = tts.synthesize(

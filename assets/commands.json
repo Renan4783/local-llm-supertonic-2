@@ -1,0 +1,24 @@
+{
+  "screenreader": [
+    "leia minha tela",
+    "leia a minha tela",
+    "ler minha tela",
+    "ler a minha tela",
+    "o que está na tela",
+    "me diga o que está na tela"
+  ],
+
+  "webcam": [
+    "abra a webcam",
+    "ligue a webcam",
+    "use a webcam",
+    "tire uma foto"
+  ],
+
+  "websearch": [
+    "pesquise",
+    "procure",
+    "busque na internet",
+    "pesquise na web"
+  ]
+}
